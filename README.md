@@ -1,52 +1,92 @@
-# RAG-Enhanced Chatbot with AWS OpenSearch
+# RAG Chatbot with AWS Bedrock Knowledge Base
 
-A chatbot that integrates AWS Bedrock with OpenSearch to provide answers from your knowledge base first, falling back to the model's general knowledge when needed.
+A simple chatbot that integrates AWS Bedrock with your Bedrock Knowledge Base to provide answers from your documents first, falling back to the model's general knowledge when needed.
 
 ## Features
 
-- 🔍 **Knowledge Base Search**: Automatically searches your OpenSearch documents
+- 🔍 **Semantic Search**: Uses AWS Bedrock Knowledge Bases vector search
 - 🤖 **Fallback to LLM**: Uses general AI knowledge when documents don't have the answer
 - 📊 **Source Indicators**: Shows whether answer came from knowledge base or general knowledge
 - 💬 **Conversation History**: Maintains context across the conversation
 
-## Setup
+## Quick Start
 
-### 1. Install Dependencies
+### 1. Configure
+
+Edit [`main.py`](file:///c:/sinergia_ak/chatbot/SkillBuilder/chatbot_demo/main.py) and update these values:
+
+```python
+AWS_REGION = "eu-south-1"  # Your AWS region
+MODEL_ID = "openai.gpt-oss-20b-1:0"  # Your Bedrock model
+KNOWLEDGE_BASE_ID = "79FFW5FF2S"  # Your Knowledge Base ID
+```
+
+### 2. Install Dependencies
 
 ```bash
 pip install -r requirements.txt
 ```
 
-### 2. Configure OpenSearch
+### 3. Run
 
-Edit `config.py` and update the following settings:
-
-```python
-# Your OpenSearch domain endpoint (without https://)
-OPENSEARCH_HOST = "your-domain.eu-central-1.es.amazonaws.com"
-
-# Your index name
-OPENSEARCH_INDEX = "your_index_name"
-
-# Optional: Adjust these parameters
-TOP_K_DOCUMENTS = 3  # Number of documents to retrieve
-MIN_RELEVANCE_SCORE = 0.5  # Minimum relevance score (0-1)
+```bash
+python main.py
 ```
 
-### 3. AWS Credentials
+## How It Works
 
-Ensure your AWS credentials are configured:
-- Environment variables (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`)
-- AWS credentials file (`~/.aws/credentials`)
-- IAM role (if running on EC2/ECS)
+1. **User asks a question** → 
+2. **Bedrock Knowledge Base Retriever** performs semantic vector search →
+3. **If relevant documents found** → Adds them as context to the prompt →
+4. **LLM generates answer** → Shows source indicator
 
-### 4. Required Permissions
+## Example Usage
 
-Your AWS user/role needs:
-- **Bedrock**: Access to invoke the model
-- **OpenSearch**: Read permissions on your domain and index
+```
+You: What is our return policy?
+🔍 Searching knowledge base...
+✓ Found 2 relevant document(s)
 
-Example IAM policy:
+📚 [From Knowledge Base]
+Bot: Our return policy allows 30 days for returns...
+
+You: What's the weather?
+🔍 Searching knowledge base...
+ℹ No relevant documents found, using general knowledge
+
+🤖 [General Knowledge]
+Bot: I don't have real-time weather information.
+```
+
+## Configuration
+
+### Number of Documents Retrieved
+
+In `create_retriever()`:
+```python
+"vectorSearchConfiguration": {
+    "numberOfResults": 3  # Adjust to retrieve more/fewer chunks
+}
+```
+
+### Model Temperature
+
+In `create_llm()`:
+```python
+"temperature": 0.1  # Lower = more factual, Higher = more creative
+```
+
+## AWS Setup Requirements
+
+### 1. Bedrock Knowledge Base
+- Create a Knowledge Base in AWS Bedrock
+- Sync your documents
+- Note the Knowledge Base ID
+
+### 2. IAM Permissions
+
+Your AWS credentials need:
+
 ```json
 {
   "Version": "2012-10-17",
@@ -54,107 +94,33 @@ Example IAM policy:
     {
       "Effect": "Allow",
       "Action": [
-        "bedrock:InvokeModel"
+        "bedrock:InvokeModel",
+        "bedrock:Retrieve"
       ],
       "Resource": "*"
-    },
-    {
-      "Effect": "Allow",
-      "Action": [
-        "es:ESHttpGet",
-        "es:ESHttpPost"
-      ],
-      "Resource": "arn:aws:es:eu-central-1:YOUR_ACCOUNT:domain/YOUR_DOMAIN/*"
     }
   ]
 }
 ```
 
-## Usage
+### 3. AWS Credentials
 
-Run the chatbot:
-
-```bash
-python main.py
-```
-
-The chatbot will:
-1. Search your OpenSearch knowledge base for relevant documents
-2. If relevant documents are found (score ≥ 0.5), answer based on those documents
-3. If no relevant documents, use the LLM's general knowledge
-4. Clearly indicate the source of each answer
-
-Example interaction:
-```
-You: What is our refund policy?
-🔍 Searching knowledge base...
-✓ Found 2 relevant document(s)
-
-📚 [From Knowledge Base]
-Bot: We offer a 30-day money-back guarantee on all products...
-
-You: What's the capital of France?
-🔍 Searching knowledge base...
-ℹ No relevant documents found, using general knowledge
-
-🤖 [General Knowledge]
-Bot: Paris is the capital of France.
-```
-
-## OpenSearch Index Structure
-
-Your OpenSearch documents should have this structure:
-
-```json
-{
-  "title": "Document Title",
-  "content": "The main content of your document...",
-  "metadata": {
-    "category": "optional",
-    "date": "optional"
-  }
-}
-```
-
-The search will prioritize the `content` field, but also search `title` and `metadata`.
-
-## Configuration Options
-
-In `config.py`:
-
-- `USE_KNOWLEDGE_BASE`: Set to `False` to disable knowledge base search
-- `TOP_K_DOCUMENTS`: Number of documents to retrieve (default: 3)
-- `MIN_RELEVANCE_SCORE`: Minimum score to consider a document relevant (0-1, default: 0.5)
-- `MAX_TOKENS`, `TEMPERATURE`, `TOP_P`: LLM generation parameters
-
-## Customization
-
-### Adjusting Search Strategy
-
-Edit `opensearch_client.py` to customize the search query. Current implementation uses `multi_match` with fuzzy matching. You can modify:
-
-- Fields to search
-- Field boosting (e.g., `content^2` gives content 2x weight)
-- Fuzzy matching settings
-- Query type (best_fields, most_fields, cross_fields, etc.)
-
-### Custom System Prompts
-
-Edit the `create_system_prompt()` function in `main.py` to customize how the bot uses context from documents.
+Ensure credentials are configured:
+- Environment variables (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`)
+- AWS credentials file (`~/.aws/credentials`)
+- IAM role (if on EC2/ECS)
 
 ## Troubleshooting
 
-**Can't connect to OpenSearch?**
-- Verify your `OPENSEARCH_HOST` is correct (without `https://`)
-- Check AWS credentials have OpenSearch permissions
-- Ensure your OpenSearch domain's access policy allows your AWS user/role
+**Can't find Knowledge Base?**
+- Verify `KNOWLEDGE_BASE_ID` is correct
+- Check the Knowledge Base is in the same region as `AWS_REGION`
 
-**No documents found?**
-- Check your `OPENSEARCH_INDEX` name is correct
-- Try lowering `MIN_RELEVANCE_SCORE`
-- Verify documents exist in your index: `GET /your_index/_count`
+**No documents retrieved?**
+- Ensure your Knowledge Base is synced
+- Test the same question in AWS Bedrock playground
+- Check documents are actually indexed
 
-**LLM not responding?**
-- Verify Bedrock permissions
-- Check `MODEL_ID` is available in your region
-- Ensure model access is enabled in AWS Bedrock console
+**Authentication errors?**
+- Verify AWS credentials are configured
+- Check IAM permissions include `bedrock:Retrieve`
