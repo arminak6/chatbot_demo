@@ -5,7 +5,7 @@ import re
 # Configuration
 AWS_REGION = "eu-south-1" 
 MODEL_ID = "openai.gpt-oss-20b-1:0"
-KNOWLEDGE_BASE_ID = "79FFW5FF2S"  # Your Bedrock Knowledge Base ID
+KNOWLEDGE_BASE_ID = "79FFW5FF2S" 
 
 # System Prompt
 SYSTEM_PROMPT_CONTENT = (
