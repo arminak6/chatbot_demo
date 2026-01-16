@@ -1,150 +1,66 @@
-from langchain_aws import ChatBedrock
+from langchain_aws import ChatBedrock, AmazonKnowledgeBasesRetriever
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 import re
-from opensearch_client import OpenSearchKnowledgeBase
-import config
+
+# Configuration
+AWS_REGION = "eu-south-1" 
+MODEL_ID = "openai.gpt-oss-20b-1:0"
+KNOWLEDGE_BASE_ID = "79FFW5FF2S"  # Your Bedrock Knowledge Base ID
+
+# System Prompt
+SYSTEM_PROMPT_CONTENT = (
+    "You are a professional AI assistant.\n\n"
+    "Rules:\n"
+    "- If 'Context from documents' is provided below, answer based PRIMARILY on that context.\n"
+    "- If the context doesn't contain the answer, use your general knowledge.\n"
+    "- Provide ONLY the final answer. Do NOT explain your reasoning.\n"
+    "- Keep answers short, clear, and simple.\n"
+    "- Never invent facts.\n"
+    "- If you don't know the answer, say 'I don't know'."
+)
 
 def clean_response(text):
     """Remove reasoning tags and clean response"""
     cleaned = re.sub(r'<reasoning>.*?</reasoning>', '', text, flags=re.DOTALL)
     return cleaned.strip()
 
-
-def create_system_prompt(use_context: bool = False, context: str = "") -> SystemMessage:
-    """
-    Create system prompt based on whether we have knowledge base context
-    
-    Args:
-        use_context: Whether context from knowledge base is available
-        context: The formatted context from knowledge base documents
-    
-    Returns:
-        SystemMessage with appropriate instructions
-    """
-    base_rules = (
-        "You are a professional AI assistant.\n"
-        "\n"
-        "Rules:\n"
-        "- Provide ONLY the final answer to the user.\n"
-        "- Do NOT explain your reasoning or thought process.\n"
-        "- Do NOT show intermediate steps or analysis.\n"
-        "- Keep answers short, clear, and simple.\n"
-        "- Never invent facts.\n"
-    )
-    
-    if use_context and context:
-        prompt_content = (
-            f"{base_rules}"
-            f"- Answer the question based PRIMARILY on the knowledge base documents provided below.\n"
-            f"- Only use your general knowledge if the documents don't contain the answer.\n"
-            f"- If the answer is not in the documents and you don't know from general knowledge, say \"I don't know\".\n"
-            f"- When answering from the documents, be confident and direct.\n"
-            f"\n"
-            f"{context}"
-        )
-    else:
-        prompt_content = (
-            f"{base_rules}"
-            f"- If you do not know the answer, say \"I don't know\".\n"
-        )
-    
-    return SystemMessage(content=prompt_content)
-
-
 def create_llm():
     """Create and configure the LLM"""
     return ChatBedrock(
-        model_id=config.MODEL_ID,
-        region_name=config.AWS_REGION,
+        model_id=MODEL_ID,
+        region_name=AWS_REGION,
         model_kwargs={
-            "max_tokens": config.MAX_TOKENS,
-            "temperature": config.TEMPERATURE,
-            "top_p": config.TOP_P,
+            "max_tokens": 512,
+            "temperature": 0.1,  # Lower temperature for more factual answers
         },
     )
 
-
-def get_answer_with_knowledge_base(
-    user_question: str,
-    opensearch_kb: OpenSearchKnowledgeBase,
-    llm: ChatBedrock,
-    conversation_history: list
-) -> tuple[str, bool]:
-    """
-    Get answer by first searching knowledge base, then using LLM
-    
-    Args:
-        user_question: User's question
-        opensearch_kb: OpenSearch knowledge base client
-        llm: LangChain LLM instance
-        conversation_history: Current conversation history
-    
-    Returns:
-        Tuple of (answer, used_knowledge_base)
-    """
-    used_kb = False
-    context = ""
-    
-    if config.USE_KNOWLEDGE_BASE:
-        # Search knowledge base
-        print("🔍 Searching knowledge base...")
-        documents = opensearch_kb.search_documents(
-            query=user_question,
-            top_k=config.TOP_K_DOCUMENTS,
-            min_score=config.MIN_RELEVANCE_SCORE
-        )
-        
-        if documents:
-            used_kb = True
-            print(f"✓ Found {len(documents)} relevant document(s)")
-            context = opensearch_kb.format_context(documents)
-        else:
-            print("ℹ No relevant documents found, using general knowledge")
-    
-    # Create appropriate system prompt
-    system_prompt = create_system_prompt(use_context=used_kb, context=context)
-    
-    # Build message history with the appropriate system prompt
-    messages = [system_prompt] + conversation_history + [HumanMessage(content=user_question)]
-    
-    # Get LLM response
-    response = llm.invoke(messages)
-    cleaned_content = clean_response(response.content)
-    
-    return cleaned_content, used_kb
-
+def create_retriever():
+    """Create Bedrock Knowledge Base retriever"""
+    return AmazonKnowledgeBasesRetriever(
+        knowledge_base_id=KNOWLEDGE_BASE_ID,
+        region_name=AWS_REGION,
+        retrieval_config={
+            "vectorSearchConfiguration": {
+                "numberOfResults": 3  # Number of document chunks to retrieve
+            }
+        },
+    )
 
 def main():
     """Main chatbot loop"""
+    print("Initializing chatbot with Bedrock Knowledge Base...")
     llm = create_llm()
+    retriever = create_retriever()
     
-    # Initialize OpenSearch knowledge base
-    opensearch_kb = None
-    if config.USE_KNOWLEDGE_BASE:
-        try:
-            print("Initializing OpenSearch knowledge base...")
-            opensearch_kb = OpenSearchKnowledgeBase(
-                host=config.OPENSEARCH_HOST,
-                region=config.OPENSEARCH_REGION,
-                index_name=config.OPENSEARCH_INDEX,
-                port=config.OPENSEARCH_PORT,
-                use_ssl=config.OPENSEARCH_USE_SSL,
-                is_serverless=config.OPENSEARCH_IS_SERVERLESS
-            )
-            print("✓ OpenSearch connected successfully\n")
-        except Exception as e:
-            print(f"⚠ Warning: Could not connect to OpenSearch: {e}")
-            print("Continuing with general knowledge only...\n")
-            opensearch_kb = None
-    
-    # Conversation history (without system prompt - we'll add it per request)
-    conversation_history = []
+    # Conversation history with system prompt
+    history = [SystemMessage(content=SYSTEM_PROMPT_CONTENT)]
     
     print("=" * 60)
     print("RAG-Enhanced Chatbot Started")
     print("=" * 60)
-    print("Your chatbot will search the knowledge base first,")
-    print("then use general knowledge if needed.")
+    print(f"Using Knowledge Base: {KNOWLEDGE_BASE_ID}")
+    print("Your chatbot will search documents first, then use general knowledge.")
     print("Type 'exit' to quit.\n")
     
     while True:
@@ -156,30 +72,54 @@ def main():
             break
         
         try:
-            # Get answer with knowledge base search
-            answer, used_kb = get_answer_with_knowledge_base(
-                user_question=user_text,
-                opensearch_kb=opensearch_kb if opensearch_kb else None,
-                llm=llm,
-                conversation_history=conversation_history
-            )
+            # STEP 1: Retrieve from Knowledge Base
+            print("🔍 Searching knowledge base...")
+            relevant_docs = retriever.invoke(user_text)
+            
+            # Check if we got relevant documents
+            if relevant_docs and len(relevant_docs) > 0:
+                print(f"✓ Found {len(relevant_docs)} relevant document(s)")
+                
+                # Combine document contents
+                context_text = "\n\n".join([
+                    f"[Document {i+1}]\n{doc.page_content}" 
+                    for i, doc in enumerate(relevant_docs)
+                ])
+                
+                # STEP 2: Augment the prompt with context
+                enriched_query = (
+                    f"Context from documents:\n{context_text}\n\n"
+                    f"User Question: {user_text}"
+                )
+                
+                source_indicator = "📚 [From Knowledge Base]"
+            else:
+                print("ℹ No relevant documents found, using general knowledge")
+                enriched_query = user_text
+                source_indicator = "🤖 [General Knowledge]"
+            
+            # Add to history
+            history.append(HumanMessage(content=enriched_query))
+            
+            # STEP 3: Generate response
+            response = llm.invoke(history)
+            cleaned_content = clean_response(response.content)
             
             # Display answer with source indicator
-            source_indicator = "📚 [From Knowledge Base]" if used_kb else "🤖 [General Knowledge]"
             print(f"\n{source_indicator}")
-            print(f"Bot: {answer}\n")
+            print(f"Bot: {cleaned_content}\n")
             
-            # Update conversation history (just the basic exchange)
-            conversation_history.append(HumanMessage(content=user_text))
-            conversation_history.append(AIMessage(content=answer))
+            # Save AI response to history
+            history.append(AIMessage(content=response.content))
             
             # Keep conversation history manageable (last 10 exchanges)
-            if len(conversation_history) > 20:
-                conversation_history = conversation_history[-20:]
+            if len(history) > 21:  # Keep system prompt + last 10 exchanges (20 messages)
+                history = [history[0]] + history[-20:]
                 
         except Exception as e:
             print(f"\n⚠ Error: {e}\n")
-
+            import traceback
+            traceback.print_exc()
 
 if __name__ == "__main__":
     main()
